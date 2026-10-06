@@ -16,6 +16,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Package version, plus the commit when built by CI (RC_BUILD).
+const VERSION: &str = match option_env!("RC_BUILD") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 struct Shared {
     lobbies: Lobbies,
     start: Instant,
@@ -42,7 +48,9 @@ fn main() {
     let mut per_ip = 3;
     let mut snapshot_hz = 60u64;
     let mut max_lobbies = 256;
-    let mut web = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web"));
+    // `web/` beside the executable (release downloads), else the source tree's.
+    let beside_exe = std::env::current_exe().ok().and_then(|p| Some(p.parent()?.join("web"))).filter(|p| p.is_dir());
+    let mut web = beside_exe.unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web")));
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -50,13 +58,17 @@ fn main() {
             "--bots" => fill = args.next().and_then(|v| v.parse().ok()).expect("--bots N"),
             "--rounds" => rounds = args.next().and_then(|v| v.parse().ok()).expect("--rounds N"),
             "--web" => web = args.next().expect("--web DIR").into(),
+            "--version" => {
+                println!("{VERSION}");
+                return;
+            }
             "--stats" => stats = true,
             "--threads" => threads = args.next().and_then(|v| v.parse().ok()).expect("--threads N"),
             "--snapshot-hz" => snapshot_hz = args.next().and_then(|v| v.parse().ok()).filter(|&v: &u64| (1..=60).contains(&v)).expect("--snapshot-hz 1-60"),
             "--max-lobbies" => max_lobbies = args.next().and_then(|v| v.parse().ok()).expect("--max-lobbies N"),
             "--max-per-ip" => per_ip = args.next().and_then(|v| v.parse().ok()).expect("--max-per-ip N"),
             _ => {
-                eprintln!("usage: server [--addr 0.0.0.0:8080] [--bots N (main lobby: fill rounds to N cycles)] [--rounds N (main lobby, default 10)] [--web DIR] [--threads N (simulation, default cores up to 8)] [--max-lobbies N (default 256)] [--max-per-ip N (lobbies one address may open, default 3)] [--snapshot-hz N (position updates, default 60)] [--stats]");
+                eprintln!("usage: server [--addr 0.0.0.0:8080] [--bots N (main lobby: fill rounds to N cycles)] [--rounds N (main lobby, default 10)] [--web DIR] [--threads N (simulation, default cores up to 8)] [--max-lobbies N (default 256)] [--max-per-ip N (lobbies one address may open, default 3)] [--snapshot-hz N (position updates, default 60)] [--stats] [--version]");
                 std::process::exit(2);
             }
         }
@@ -67,6 +79,9 @@ fn main() {
     let snap_every = (TICK_HZ as u64 / snapshot_hz).max(1);
     let main = Game::new(fill, rounds, seed).snapshot_every(snap_every);
     let lobbies = Lobbies::new(main, seed.rotate_left(17), threads.max(1) - 1, per_ip).snapshot_every(snap_every).max_lobbies(max_lobbies);
+    if !web.join("index.html").is_file() || !web.join("client.wasm").is_file() {
+        eprintln!("warning: no game files in {} (need index.html, main.js, client.wasm; see --web)", web.display());
+    }
     let shared = Arc::new(Shared { lobbies, start, skipped: AtomicU64::new(0), web, stats });
 
     {
@@ -75,7 +90,7 @@ fn main() {
     }
 
     let listener = TcpListener::bind(&addr).expect("bind");
-    println!("retro cycles listening on http://{addr}");
+    println!("retro cycles {VERSION} listening on http://{addr}");
     let next_conn = AtomicU64::new(1);
     for stream in listener.incoming().flatten() {
         let shared = shared.clone();

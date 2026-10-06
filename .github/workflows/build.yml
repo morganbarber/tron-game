@@ -1,0 +1,62 @@
+# Tests and packages the server for Linux on every push.
+#   push to master/main  -> refreshes the "latest-build" pre-release
+#   push a tag v1.2.3    -> publishes release v1.2.3
+#   pull request         -> tests and builds only (files kept as a workflow artifact)
+name: Build
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Test
+        run: cargo test --release -p common -p server
+
+      - name: Package
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            export RC_BUILD="${GITHUB_REF_NAME#v}"
+          else
+            export RC_BUILD="$(cargo pkgid -p server | sed 's/.*[#@]//')+${GITHUB_SHA::7}"
+          fi
+          echo "RC_BUILD=$RC_BUILD"
+          ./package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retro-cycles
+          path: dist/*
+
+      - name: Release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Retro Cycles $GITHUB_REF_NAME" --generate-notes
+
+      - name: Latest build (branch push)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+        run: |
+          gh release delete latest-build --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest-build dist/* --target "$GITHUB_SHA" --prerelease \
+            --title "Latest build" \
+            --notes "Built from ${GITHUB_SHA::7} on ${GITHUB_REF_NAME}. Download the .tar.gz for your server's CPU (x86_64 for most VPSes, aarch64 for ARM / Graviton), extract it and run ./server."

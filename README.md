@@ -66,6 +66,16 @@ Capacity benchmarks (ignored by default):
 
 ## Deploying
 
+Every push to `master` builds static Linux binaries and publishes them as the **latest-build** pre-release; pushing a tag like `v1.0.0` publishes a versioned release (`.github/workflows/build.yml`, which runs `./package.sh`). Each download holds `server` and the `web/` files it serves:
+
+```sh
+curl -LO https://github.com/morganbarber/tron/releases/download/latest-build/retro-cycles-linux-x86_64.tar.gz
+tar xzf retro-cycles-linux-x86_64.tar.gz && cd retro-cycles-linux-x86_64
+./server --addr 0.0.0.0:8080 --snapshot-hz 30
+```
+
+Use `aarch64` instead of `x86_64` for ARM servers (Graviton, Raspberry Pi). The binaries are statically linked, so they run on any distribution; `server --version` shows the build. `./package.sh` builds the same archives locally into `dist/`.
+
 Each connection uses 1 thread and 3 file descriptors, so raise the open-file limit (`ulimit -n 65536`, or `LimitNOFILE=65536` in a systemd unit). Most systems default to 1024, which caps the server at about 330 connections.
 
 Capacity, measured on an i9-10850K over loopback: connections spread over lobbies of 16 bots, up to 64 connections each (every connection receives the same snapshots a player does):
